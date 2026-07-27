@@ -95,4 +95,4 @@ MIT — with an ethics clause (see LICENSE file)
 
 **If this helped you learn something, star the repo — it motivates me to keep improving it.**
 
---Built with ❤️ for education, not exploitation.--
+`--Built with ❤️ for education, not exploitation.--`
