@@ -1,0 +1,20 @@
+[package]
+name = "wifi-hack-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["Dipesh Pokhrel"]
+description = "Rust core for WiFi handshake cracking — PMK computation and verification"
+license = "MIT"
+repository = "https://github.com/letxworld/wifi-hack-lab"
+readme = "README.md"
+
+[lib]
+crate-type = ["cdylib"]  # Produces .so/.dylib/.dll for Python
+name = "wifi_hack_core"
+
+[dependencies]
+pyo3 = { version = "0.20", features = ["extension-module"] }
+pbkdf2 = "0.12"
+hmac = "0.12"
+sha1 = "0.10"
+hex = "0.4"
