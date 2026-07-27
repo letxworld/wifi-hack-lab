@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+env/
+.env
+*.so
+*.dylib
+*.dll
+
+# Rust
+target/
+Cargo.lock
+
+# Maturin build
+target/
+*.egg-info/
+dist/
+build/
+
+# PCAP / capture files (sensitive)
+*.pcap
+*.pcapng
+*.cap
+*.hccapx
+*.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Temporary / test outputs
+tmp/
+logs/
+*.log
+
+# Sensitive config (if any)
+config.ini
+.secrets
