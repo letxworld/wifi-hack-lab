@@ -1,0 +1,16 @@
+# Core dependencies
+scapy>=2.4.5
+click>=8.0.0
+rich>=13.0.0
+
+# Development & testing
+pytest>=7.0.0
+pytest-cov>=4.0.0
+
+# Build tools (for Rust integration)
+maturin>=0.14.0,<0.15.0
+setuptools>=65.0.0
+wheel>=0.38.0
+
+# Optional: for advanced visualizations
+# plotly>=5.0.0  # uncomment if you add graphs later
