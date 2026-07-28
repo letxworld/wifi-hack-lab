@@ -2,7 +2,7 @@
 name = "wifi-hack-core"
 version = "0.1.0"
 edition = "2021"
-authors = ["Dipesh Pokhrel"]
+author = ["Dipesh Pokhrel"]
 description = "Rust core for WiFi handshake cracking — PMK computation and verification"
 license = "MIT"
 repository = "https://github.com/letxworld/wifi-hack-lab"
