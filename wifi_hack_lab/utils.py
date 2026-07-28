@@ -88,7 +88,9 @@ def is_valid_bssid(bssid: str) -> bool:
 
 def is_valid_ssid(ssid: str) -> bool:
     """Check if SSID is non-empty and under 32 bytes (WiFi limit)."""
-    return bool(ssid) and len(ssid.encode("utf-8")) <= 32
+    # Strip whitespace - a space-only SSID is not valid
+    stripped = ssid.strip()
+    return bool(stripped) and len(ssid.encode("utf-8")) <= 32
 
 
 # --- Misc ---

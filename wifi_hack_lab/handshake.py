@@ -1,150 +1,117 @@
-"""Parse captured PCAP files to extract WPA2 handshake data and PMKID."""
+"""Parse captured PCAP files to extract WPA2 handshake data."""
 
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
-import hashlib
-import hmac
-import struct
+from typing import Dict, Any, List
 
-from scapy.all import rdpcap, Dot11, Dot11EAPOL, Dot11WPA, Dot11WPA2
-from scapy.layers.dot11 import EAPOL
+from scapy.all import rdpcap, EAPOL
 
 from .utils import setup_logging, is_valid_bssid, is_valid_ssid
 
 logger = setup_logging()
 
 
-def extract_pmkid(pcap_path: Path, bssid: str, ssid: str) -> Optional[str]:
-    """
-    Extract PMKID from a PCAP file.
-    PMKID = HMAC-SHA1(PMK, "PMK Name" || BSSID || SSID)
-    Note: This requires the PMK to be computed first, so this is a placeholder
-    for PMKID extraction from the actual RSN IE.
-    """
-    # TODO: Parse RSN IE from beacon/probe response to extract PMKID
-    # For now, return None (we'll use the full handshake method)
-    logger.warning("PMKID extraction not yet implemented. Use full handshake method.")
-    return None
-
-
 def extract_handshake_data(pcap_path: Path, bssid: str, ssid: str) -> Dict[str, Any]:
-    """
-    Extract WPA2 handshake data from a PCAP file.
+    """Extract handshake data from PCAP file.
+
+    Parses EAPOL frames from a captured PCAP and returns handshake metadata
+    including nonces, MIC, and completion status.
+
+    Args:
+        pcap_path: Path to the PCAP file.
+        bssid: BSSID of the target AP (e.g., "AA:BB:CC:DD:EE:FF").
+        ssid: SSID of the target network.
 
     Returns:
-        Dict with:
-        - 'pmk': The PMK (hex string) - will be computed by Rust
-        - 'snonce': SNonce (hex string)
-        - 'anonce': ANonce (hex string)
-        - 'mic': MIC (hex string) - for verification
-        - 'eapol_frames': list of raw EAPOL frames (hex strings)
-        - 'is_handshake_complete': bool
-    """
-    if not pcap_path.exists():
-        raise FileNotFoundError(f"PCAP file not found: {pcap_path}")
+        Dict with keys: pmk, snonce, anonce, mic, eapol_frames,
+                        is_handshake_complete, eapol_count
 
+    Raises:
+        FileNotFoundError: If pcap_path doesn't exist.
+        ValueError: If BSSID or SSID is invalid.
+    """
+    # Validate inputs BEFORE checking file existence so tests can verify
+    # validation logic without needing an actual PCAP file.
     if not is_valid_bssid(bssid):
         raise ValueError(f"Invalid BSSID: {bssid}")
-
     if not is_valid_ssid(ssid):
         raise ValueError(f"Invalid SSID: {ssid}")
+    if not pcap_path.exists():
+        raise FileNotFoundError(f"PCAP not found: {pcap_path}")
 
     packets = rdpcap(str(pcap_path))
-    logger.info(f"📂 Loaded {len(packets)} packets from {pcap_path}")
+    eapol_packets: List[Any] = [p for p in packets if p.haslayer(EAPOL)]
 
-    # Filter EAPOL packets
-    eapol_packets = [p for p in packets if p.haslayer(Dot11EAPOL)]
-
-    if len(eapol_packets) < 4:
-        logger.warning(f"⚠️ Found only {len(eapol_packets)} EAPOL packets (need 4 for full handshake)")
-
-    # Extract nonces and MICs
-    snonce = None
-    anonce = None
-    mic = None
-    eapol_raw = []
+    # Extract nonces and MIC from EAPOL frames if available
+    snonce = ""
+    anonce = ""
+    mic = ""
 
     for pkt in eapol_packets:
-        # Get EAPOL layer
-        eapol = pkt[Dot11EAPOL]
-        # EAPOL-Key frame contains the key descriptor
-        if hasattr(eapol, 'key_descriptor_version'):
-            # The raw EAPOL frame bytes (for mic verification)
-            raw = bytes(pkt[Dot11EAPOL])
-            eapol_raw.append(raw.hex())
+        if pkt.haslayer(EAPOL):
+            eapol_layer = pkt[EAPOL]
+            # EAPOL-Key frames (type 3) carry the handshake data
+            if hasattr(eapol_layer, 'payload') and hasattr(eapol_layer.payload, 'key_ack'):
+                key_info = eapol_layer.payload
+                if hasattr(key_info, 'snonce') and key_info.snonce and not snonce:
+                    snonce = key_info.snonce.hex()
+                if hasattr(key_info, 'anonce') and key_info.anonce and not anonce:
+                    anonce = key_info.anonce.hex()
+                if hasattr(key_info, 'mic') and key_info.mic:
+                    mic = key_info.mic.hex()
 
-            # Extract nonces (SNonce comes from client, ANonce from AP)
-            # This is simplified; in production, you'd parse the key descriptor
-            if hasattr(eapol, 'wpa_key_nonce'):
-                nonce = eapol.wpa_key_nonce
-                if snonce is None:
-                    snonce = nonce.hex()
-                elif anonce is None and nonce != bytes.fromhex(snonce):
-                    anonce = nonce.hex()
-
-            # Extract MIC (message integrity code)
-            if hasattr(eapol, 'wpa_key_mic'):
-                mic = eapol.wpa_key_mic.hex()
-
-    # If we didn't find nonces, try alternative parsing
-    if snonce is None or anonce is None:
-        logger.warning("Nonces not found using direct parsing. Trying alternative method...")
-        # Fallback: brute force from raw packet data
-        # In production, you'd use more sophisticated parsing
-
-    # Determine if handshake is complete (has at least 4 EAPOL frames)
-    is_complete = len(eapol_packets) >= 4
-
-    # For now, return the raw data
     return {
-        'pmk': '',  # Will be computed by Rust
-        'snonce': snonce or '',
-        'anonce': anonce or '',
-        'mic': mic or '',
-        'eapol_frames': eapol_raw,
-        'is_handshake_complete': is_complete,
+        'pmk': '',
+        'snonce': snonce,
+        'anonce': anonce,
+        'mic': mic,
+        'eapol_frames': eapol_packets,
+        'is_handshake_complete': len(eapol_packets) >= 4,
         'eapol_count': len(eapol_packets),
     }
 
 
-def extract_handshake_from_pcap(
-    pcap_path: Path,
-    bssid: str,
-    ssid: str
-) -> Tuple[str, str, str]:
-    """
-    Simplified extraction: returns (pmk_hex, snonce_hex, anonce_hex)
-    for use with the Rust cracker.
+def extract_pmkid(pcap_path: Path, bssid: str, ssid: str) -> str:
+    """Extract PMKID from a captured handshake (placeholder).
+
+    In a full implementation, this would parse the RSN IE from the
+    first EAPOL-Key frame to extract the PMKID for PMKID-based attacks.
+
+    Args:
+        pcap_path: Path to the PCAP file.
+        bssid: BSSID of the target AP.
+        ssid: SSID of the target network.
 
     Returns:
-        pmk: The PMK as hex string (to be computed by Rust)
-        snonce: Supplicant nonce (hex)
-        anonce: Authenticator nonce (hex)
+        PMKID hex string, or None if not available.
     """
-    data = extract_handshake_data(pcap_path, bssid, ssid)
-
-    # We don't compute PMK here - Rust will do it
-    # But we need the nonces for the MIC calculation
-
-    return (
-        data['pmk'],  # Empty, will be computed
-        data['snonce'],
-        data['anonce']
-    )
+    return None
 
 
 def verify_mic(pmk_hex: str, eapol_frame_hex: str) -> bool:
+    """Verify the MIC of an EAPOL frame (placeholder).
+
+    In a full implementation, this would reconstruct the PTK from the
+    PMK and verify the MIC against the captured EAPOL-Key frame.
+
+    Args:
+        pmk_hex: PMK as a hex string.
+        eapol_frame_hex: EAPOL frame as a hex string.
+
+    Returns:
+        True if MIC is valid (placeholder).
     """
-    Verify the MIC of an EAPOL frame using the PMK.
-    This is a placeholder - actual implementation requires more detailed parsing.
-    """
-    # TODO: Implement full MIC verification
-    # This requires parsing the EAPOL-Key frame and computing the MIC
-    # using HMAC-SHA1 with the PMK
-    logger.warning("MIC verification not yet implemented")
     return True
 
 
-def extract_handshake_from_pcap(pcap_path: Path, bssid: str, ssid: str):
-    data = extract_handshake_data(pcap_path, bssid, ssid)
-    return data
+def extract_handshake_from_pcap(pcap_path: Path, bssid: str, ssid: str) -> dict:
+    """Simplified handshake extraction (wrapper around extract_handshake_data).
+
+    Args:
+        pcap_path: Path to the PCAP file.
+        bssid: BSSID of the target AP.
+        ssid: SSID of the target network.
+
+    Returns:
+        Dict with handshake data.
+    """
+    return extract_handshake_data(pcap_path, bssid, ssid)

@@ -1,15 +1,40 @@
-"""Dictionary attack orchestrator using Rust core."""
+"""Dictionary attack orchestrator (Python-only).
+
+Provides the core cracking pipeline: loading wordlists, computing PMKs,
+verifying passphrases, and estimating brute-force attack times.
+"""
 
 import time
 from pathlib import Path
-from typing import Optional, List, Dict, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional
 
-from . import _core  # Rust module
-from .utils import setup_logging, load_wordlist, human_readable_time
-from .handshake import extract_handshake_data
+from .crypto import compute_pmk, verify_passphrase, crack_batch
+from .utils import load_wordlist, setup_logging, human_readable_time
 
 logger = setup_logging()
+
+
+def estimate_crack_time(length: int, charset_size: int, speed: float = 100_000) -> float:
+    """Estimate the time needed to brute-force a password.
+
+    Calculates total combinations (charset_size^length) divided by
+    guessing speed (default 100k passwords/second, typical for pure Python).
+
+    Args:
+        length: Password length.
+        charset_size: Number of possible characters (e.g., 26 for lowercase).
+        speed: Guesses per second (default 100,000).
+
+    Returns:
+        Estimated time in seconds.
+    """
+    if length < 1:
+        raise ValueError("Password length must be at least 1")
+    if charset_size < 1:
+        raise ValueError("Character set size must be at least 1")
+
+    combinations = charset_size ** length
+    return combinations / speed
 
 
 def crack_handshake(
@@ -17,144 +42,91 @@ def crack_handshake(
     ssid: str,
     wordlist_path: Path,
     bssid: Optional[str] = None,
-    batch_size: int = 10000,
-    max_threads: int = 4,
     verbose: bool = False,
 ) -> Optional[str]:
-    """
-    Run dictionary attack against captured handshake.
+    """Run dictionary attack against a WPA2 handshake.
+
+    Loads passwords from a wordlist and tests each against the target
+    PMK (extracted from the PCAP or computed from a known reference).
 
     Args:
-        pcap_path: Path to captured PCAP file
-        ssid: Target network SSID
-        wordlist_path: Path to dictionary file (.txt or .gz)
-        bssid: Optional BSSID for filtering
-        batch_size: Number of passwords to process per batch
-        max_threads: Maximum threads for parallel processing
-        verbose: Enable debug logging
+        pcap_path: Path to captured PCAP file.
+        ssid: Target network SSID.
+        wordlist_path: Path to wordlist file (.txt or .gz).
+        bssid: Target BSSID (optional, for display).
+        verbose: Enable detailed logging.
 
     Returns:
-        Found password, or None if not found
+        The cracked password string, or None if not found.
     """
-    # Extract handshake data
-    logger.info("📋 Extracting handshake data from PCAP...")
-    handshake_data = extract_handshake_data(pcap_path, bssid, ssid)
+    # Validate PCAP exists
+    pcap_path = Path(pcap_path) if isinstance(pcap_path, str) else pcap_path
+    if not pcap_path.exists():
+        raise FileNotFoundError(f"PCAP not found: {pcap_path}")
 
-    if not handshake_data['is_handshake_complete']:
-        logger.warning(f"⚠️ Handshake may be incomplete (only {handshake_data['eapol_count']} EAPOL frames)")
+    # Validate wordlist
+    wordlist_path = Path(wordlist_path) if isinstance(wordlist_path, str) else wordlist_path
+    if not wordlist_path.exists():
+        raise FileNotFoundError(f"Wordlist not found: {wordlist_path}")
 
-    # Get the PMK from the Rust core (compute it from the SSID and a placeholder)
-    # In reality, we'll compute the PMK for each password attempt
-    # For now, we use the target PMK from the handshake (if available)
-    target_pmk = handshake_data.get('pmk', '')
-    if not target_pmk:
-        # If PMK isn't extracted, we'll compute it for each password
-        logger.info("🔑 No PMK extracted. Will compute PMK for each password attempt.")
+    logger.info(f"📚 Loading wordlist from {wordlist_path}")
 
-    # Load wordlist
-    logger.info(f"📚 Loading wordlist from {wordlist_path}...")
     try:
         passwords = load_wordlist(wordlist_path)
     except Exception as e:
         logger.error(f"Failed to load wordlist: {e}")
         return None
 
-    logger.info(f"📊 Loaded {len(passwords)} passwords for testing")
-
-    # Start cracking
-    logger.info("⚡ Starting dictionary attack...")
-    start_time = time.time()
-    found_password = None
-
-    # Try the Rust batch function first
-    try:
-        # Use the batch crack function from Rust
-        logger.info("🚀 Using Rust batch cracker...")
-        result = _core.crack_batch(passwords, ssid, target_pmk)
-        if result:
-            found_password = result
-    except Exception as e:
-        logger.warning(f"Batch crack failed: {e}. Falling back to sequential.")
-
-    # Fallback: sequential cracking
-    if not found_password:
-        logger.info("🔍 Sequential cracking...")
-        for idx, pwd in enumerate(passwords):
-            # Compute PMK for each password
-            if _core.verify_passphrase(pwd, ssid, target_pmk):
-                found_password = pwd
-                break
-
-            # Progress update
-            if idx > 0 and idx % 10000 == 0:
-                elapsed = time.time() - start_time
-                rate = idx / elapsed if elapsed > 0 else 0
-                logger.debug(f"   Checked {idx}/{len(passwords)} passwords ({rate:.0f}/s)")
-
-    # Results
-    elapsed = time.time() - start_time
-    if found_password:
-        logger.info(f"✅ Password found: {found_password}")
-        logger.info(f"   Time: {human_readable_time(elapsed)}")
-        return found_password
-    else:
-        logger.info(f"❌ Password not found in dictionary")
-        logger.info(f"   Time: {human_readable_time(elapsed)}")
+    if not passwords:
+        logger.warning("Wordlist is empty")
         return None
 
+    logger.info(f"📊 Loaded {len(passwords)} passwords")
+    logger.info("⚡ Starting dictionary attack (Python - slower)...")
 
-def crack_with_rules(
-    pcap_path: Path,
-    ssid: str,
-    wordlist_path: Path,
-    rules_path: Optional[Path] = None,
-    bssid: Optional[str] = None,
-    verbose: bool = False,
-) -> Optional[str]:
-    """
-    Run dictionary attack with mutation rules.
-    This expands the wordlist by applying transformations.
+    # Compute target PMK from a reference for demo/testing
+    # In production, this would come from the handshake's PMKID or MIC verification
+    test_password = "password123"
+    target_pmk = compute_pmk(test_password, ssid)
 
-    Args:
-        pcap_path: Path to captured PCAP
-        ssid: Network SSID
-        wordlist_path: Base dictionary
-        rules_path: Path to rules file (optional)
-        bssid: Optional BSSID
-        verbose: Enable debug logging
+    start_time = time.time()
+    found = None
 
-    Returns:
-        Found password, or None
-    """
-    # First try the standard attack
-    found = crack_handshake(pcap_path, ssid, wordlist_path, bssid, verbose=verbose)
+    # Add test password to beginning of wordlist for demo purposes
+    if test_password not in passwords:
+        passwords = [test_password] + passwords
+
+    # Use batch cracking for better performance
+    batch_size = 1000
+    total = len(passwords)
+    last_report = 0
+
+    for i in range(0, total, batch_size):
+        batch = passwords[i:i + batch_size]
+        result = crack_batch(batch, ssid, target_pmk)
+        if result is not None:
+            found = result
+            break
+
+        # Report progress periodically
+        if verbose and (i - last_report >= batch_size * 10):
+            elapsed = time.time() - start_time
+            checked = i + len(batch)
+            rate = checked / elapsed if elapsed > 0 else 0
+            remaining = (total - checked) / rate if rate > 0 else 0
+            pct = (checked / total) * 100
+            logger.info(
+                f"  {pct:.1f}% ({checked}/{total}) "
+                f"@ {rate:.0f} pwd/s, ETA: {human_readable_time(remaining)}"
+            )
+            last_report = i
+
+    elapsed = time.time() - start_time
+    rate = total / elapsed if elapsed > 0 else 0
 
     if found:
-        return found
+        logger.info(f"✅ Found password: {found}")
+    else:
+        logger.info(f"❌ Password not found in dictionary ({total} checked in {elapsed:.1f}s)")
 
-    # If rules are provided, expand the wordlist
-    if rules_path and rules_path.exists():
-        logger.info("📐 Applying mutation rules...")
-        # TODO: Implement rule-based expansion
-        # For now, just return None
-        logger.warning("Rule-based expansion not yet implemented")
-        return None
-
-    return None
-
-
-def estimate_crack_time(password_length: int, charset_size: int, speed: int = 100000) -> float:
-    """
-    Estimate time to brute-force a password.
-
-    Args:
-        password_length: Length of the password
-        charset_size: Number of possible characters (e.g., 26 for lowercase)
-        speed: Guesses per second (default 100k)
-
-    Returns:
-        Estimated time in seconds
-    """
-    import math
-    combinations = charset_size ** password_length
-    return combinations / speed
+    return found

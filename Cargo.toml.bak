@@ -1,0 +1,19 @@
+[package]
+name = "wifi-hack-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <you@example.com>"]
+description = "Rust core for WiFi handshake cracking — PMK computation and verification"
+license = "MIT"
+repository = "https://github.com/YOUR_USERNAME/wifi-hack-lab"
+readme = "README.md"
+
+[lib]
+crate-type = ["cdylib"]
+name = "wifi_hack_core"
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+pbkdf2 = { version = "0.12", default-features = false, features = ["simple"] }
+sha2 = "0.10"          # <-- ADD THIS LINE
+hex = "0.4"
