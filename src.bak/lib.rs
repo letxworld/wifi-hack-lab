@@ -4,7 +4,7 @@ use pbkdf2::pbkdf2_hmac;
 use sha2::Sha256;  // <-- This requires sha2 crate
 use hex;
 
-// ... rest of code
+
 #[pyfunction]
 fn compute_pmk(passphrase: &str, ssid: &str) -> String {
     let salt = ssid.as_bytes();
